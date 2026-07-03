@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "statistical_comparison_core"
+version = "0.1.0"
+description = "Shared hypothesis test interfaces for statistical comparison packages."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "CC BY-NC 4.0"}
+dependencies = [
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["statistical_comparison_core*"]
