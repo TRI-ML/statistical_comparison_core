@@ -149,28 +149,62 @@ SequentialTestBase = SequentialTwoSampleTestBase
 class MirroredTestMixin:
     """A mixin class to define mirrored hypothesis tests.
 
-    In our terminology, a mirrored test is one that runs two one-sided tests
-    simultaneously, with the null and the alternaive flipped from each other. This is so
-    that it can yield either Decision.AcceptNull or Decision.AcceptAlternative depending
-    on the input data, unlike standard one-sided tests that can never 'accept' the null.
-    (Those standard tests will at most fail to reject the null, as represented by
-    Decision.FailToDecide.)
+    A mirrored test runs two one-sided tests simultaneously with flipped
+    alternative hypotheses, so it can yield Decision.AcceptNull,
+    Decision.AcceptAlternative, or Decision.FailToDecide.  For example, if the
+    alternative is Hypothesis.P0MoreThanP1 and the decision is
+    Decision.AcceptNull, it should be interpreted as accepting
+    Hypothesis.P0LessThanP1.
 
-    For example, if the alternative is Hypothesis.P0MoreThanP1 and the decision is
-    Decision.AcceptNull, it should be interpreted as accepting Hypothesis.P0LessThanP1.
+    The significance level alpha controls two errors simultaneously:
+    (1) probability of wrongly accepting the alternative when the null is true,
+    and (2) probability of wrongly accepting the null when the alternative is
+    true.  Bonferroni correction is not needed since the null hypothesis for one
+    test is the alternative for the other.
 
-    The significance level alpha controls the following two errors simultaneously: (1)
-    probability of wrongly accepting the alternative when the null is true, and (2)
-    probability of wrongly accepting the null when the alternative is true. Note that
-    Bonferroni correction is not needed since the null hypothesis for one test is the
-    alternative for the other.
+    Attribute ownership rules:
+
+    * The wrapper owns two child tests: ``_test_for_alternative`` (for the
+      requested alternative hypothesis) and ``_test_for_null`` (for the flipped
+      hypothesis interpreted as the null-side test).
+    * Reads of ordinary (non-wrapper-owned) attributes are forwarded to
+      ``_test_for_alternative`` via ``__getattr__``.  This is intentional for
+      read-only properties exposed by child tests.
+    * Writes of ordinary attributes fan out to both child tests when the
+      attribute already exists on ``_test_for_alternative``.
+    * Assigning ``alternative`` is special: the alternative child receives the
+      requested hypothesis and the null child receives the flipped hypothesis.
+    * ``_wrapper_owned_attributes`` is an opt-in, **class-level** frozenset
+      declaring names whose state belongs to the mirrored wrapper rather than
+      either child test.  Empty by default, so existing mirrored classes are
+      unaffected.
+    * Instance-level assignment to ``_wrapper_owned_attributes`` is rejected
+      because it would not affect dispatch.
+    * Declared wrapper-owned names are stored on the wrapper and are **not**
+      forwarded on read-before-first-write; ``__getattr__`` raises
+      ``AttributeError`` instead.
+    * Mutating methods inherited through ``__getattr__`` bind only to the
+      alternative child.  Callers that need to mutate both children should
+      prefer wrapper-level methods or property assignment.
 
     Attributes:
-        It has the same attributes as the underlying base tests.
+        _base_class: The one-sided test class.  Must be set by subclasses.
+        _wrapper_owned_attributes: Class-level frozenset of names stored on the
+            wrapper instead of being fanned out to child tests.  Empty by
+            default.
     """
 
     _base_class: Type[Union[TestBase, SequentialTestBase]] = (
         None  # To be set by subclasses.
+    )
+    _wrapper_owned_attributes: frozenset = frozenset()
+    _always_wrapper_owned_attributes: frozenset = frozenset(
+        {
+            "_test_for_alternative",
+            "_test_for_null",
+            "_base_class",
+            "_always_wrapper_owned_attributes",
+        }
     )
 
     def __init__(self, alternative: Hypothesis, *args, **kwargs) -> None:
@@ -200,35 +234,58 @@ class MirroredTestMixin:
         self._test_for_null = self._base_class(null, *args, **kwargs)
 
     def __getattr__(self, name: str) -> Any:
-        """Dynamically forward attributes from the underlying base tests.
+        """Forward attribute reads to ``_test_for_alternative``.
+
+        Declared wrapper-owned names (listed in
+        ``_wrapper_owned_attributes``) are **not** forwarded.  Reading a
+        wrapper-owned name before it has been written raises
+        ``AttributeError`` instead of silently returning child state, so the
+        lifecycle is unambiguous.
 
         Args:
             name: Name of the attribute.
 
         Raises:
-            AttributeError: If the attribute does not exist in the base test class.
+            AttributeError: If *name* is declared wrapper-owned (prevents
+                silent forwarding of child state) or if the attribute does
+                not exist on the alternative child test.
         """
-        # Dynamically forward attributes from the base test.
+        wrapper_owned = type(self)._wrapper_owned_attributes
+        if name in wrapper_owned:
+            raise AttributeError(
+                f"'{type(self).__name__}' declares '{name}' as wrapper-owned "
+                f"but it has not been set on the wrapper yet"
+            )
         if hasattr(self._test_for_alternative, name):
             return getattr(self._test_for_alternative, name)
-        else:
-            raise AttributeError(
-                f"'{self.__class__.__name__}' object has no attribute '{name}'"
-            )
+        raise AttributeError(
+            f"'{self.__class__.__name__}' object has no attribute '{name}'"
+        )
 
     def __setattr__(self, name: str, value: Any) -> None:
-        """Dynamically set attributes to the underlying base tests.
+        """Route attribute writes.
+
+        Dispatch rules, checked in order:
+
+        1. ``alternative`` -- flip the hypothesis and assign to each child.
+        2. ``_wrapper_owned_attributes`` -- reject; must be declared at the
+           class level to affect dispatch.
+        3. Always-wrapper-owned names (``_test_for_alternative``,
+           ``_test_for_null``, ``_base_class``,
+           ``_always_wrapper_owned_attributes``) and names listed in the
+           class-level ``_wrapper_owned_attributes`` -- store on the wrapper
+           via ``super().__setattr__``.
+        4. Otherwise, fan out to both child tests if the attribute exists on
+           ``_test_for_alternative``; raise ``AttributeError`` if not.
 
         Args:
             name: Name of the attribute.
             value: Value of the attribute.
 
         Raises:
-            AttributeError: If the attribute assignment to the base tests fails.
+            AttributeError: If the attribute cannot be set.
         """
         if name == "alternative":
-            # For alternative, make sure _test_for_alternative and _test_for_null has
-            # flipped alternative hypothesis.
             if value == Hypothesis.P0MoreThanP1:
                 null = Hypothesis.P0LessThanP1
             elif value == Hypothesis.P0LessThanP1:
@@ -237,16 +294,21 @@ class MirroredTestMixin:
                 raise (AttributeError(f"{value} is not a valid value for alternative."))
             self._test_for_alternative.alternative = value
             self._test_for_null.alternative = null
+        elif name == "_wrapper_owned_attributes":
+            raise AttributeError(
+                "_wrapper_owned_attributes must be declared at the class level, "
+                "not assigned on an instance, because only the class-level "
+                "declaration affects __getattr__/__setattr__ dispatch."
+            )
         else:
-            # If setting attributes after initialization, set on both
-            # _test_for_alternative and _test_for_null.
-            if name not in ["_test_for_alternative", "_test_for_null", "_base_class"]:
-                if hasattr(self._test_for_alternative, name):
-                    setattr(self._test_for_alternative, name, value)
-                    setattr(self._test_for_null, name, value)
-                else:
-                    raise AttributeError(
-                        f"'{self.__class__.__name__}' object has no attribute '{name}'"
-                    )
-            else:
+            always_owned = type(self)._always_wrapper_owned_attributes
+            wrapper_owned = type(self)._wrapper_owned_attributes
+            if name in always_owned or name in wrapper_owned:
                 super().__setattr__(name, value)
+            elif hasattr(self._test_for_alternative, name):
+                setattr(self._test_for_alternative, name, value)
+                setattr(self._test_for_null, name, value)
+            else:
+                raise AttributeError(
+                    f"'{self.__class__.__name__}' object has no attribute '{name}'"
+                )
