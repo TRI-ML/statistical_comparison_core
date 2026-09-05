@@ -3,6 +3,7 @@
 from .base import (
     Decision,
     Hypothesis,
+    MirroredAlphaSignatureError,
     MirroredTestMixin,
     SequentialTestBase,
     SequentialTwoSampleTestBase,
@@ -16,6 +17,7 @@ from .base import (
 __all__ = [
     "Decision",
     "Hypothesis",
+    "MirroredAlphaSignatureError",
     "MirroredTestMixin",
     "SequentialTestBase",
     "SequentialTwoSampleTestBase",
