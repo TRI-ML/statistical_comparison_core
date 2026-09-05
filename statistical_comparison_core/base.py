@@ -435,6 +435,25 @@ class MirroredTestMixin:
             return "positional", 0, args[0]
         return None, None, None
 
+    def compose_wrapper_p_value(self, p_value_less, p_value_more):
+        """Combine directional p-values into a wrapper-level p-value.
+
+        Under ``inference_mode="ranking"``, each child runs at ``alpha / 2``.
+        The wrapper rejects exactly when ``min(p_value_less, p_value_more) <=
+        alpha / 2``, which is equivalent to ``2 * min(...) <= alpha``.
+        Returning the doubled, capped value keeps the invariant that
+        ``wrapper_p_value <= wrapper.alpha`` means the wrapper rejects at its
+        declared level.
+
+        Under ``comparison`` and ``ranking_no_ties``, each child runs at the
+        wrapper's full ``alpha``, so the wrapper p-value is the plain minimum
+        of the two directional p-values.
+        """
+        p_value = min(p_value_less, p_value_more)
+        if self._inference_mode_is_ranking():
+            return min(1.0, 2.0 * p_value)
+        return p_value
+
     def __getattr__(self, name: str) -> Any:
         """Forward attribute reads to ``_test_for_alternative``.
 

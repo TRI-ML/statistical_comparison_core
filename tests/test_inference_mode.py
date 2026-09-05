@@ -157,6 +157,42 @@ def test_comparison_and_ranking_no_ties_child_alpha_are_identical():
     )
 
 
+# --- wrapper p-value composition is explicit and mode-aware ---
+
+@pytest.mark.parametrize("mode", ["comparison", "ranking_no_ties"])
+def test_compose_wrapper_p_value_plain_min_for_non_halving_modes(mode):
+    m = MirroredWithAlpha(
+        Hypothesis.P0MoreThanP1, alpha=0.05, inference_mode=mode
+    )
+    assert m.compose_wrapper_p_value(0.03, 0.20) == pytest.approx(0.03)
+
+
+def test_compose_wrapper_p_value_ranking_doubles_min():
+    m = MirroredWithAlpha(
+        Hypothesis.P0MoreThanP1, alpha=0.05, inference_mode="ranking"
+    )
+    assert m.compose_wrapper_p_value(0.03, 0.20) == pytest.approx(0.06)
+
+
+def test_compose_wrapper_p_value_ranking_caps_at_one():
+    m = MirroredWithAlpha(
+        Hypothesis.P0MoreThanP1, alpha=0.05, inference_mode="ranking"
+    )
+    assert m.compose_wrapper_p_value(0.70, 0.90) == pytest.approx(1.0)
+
+
+def test_compose_wrapper_p_value_not_invoked_implicitly(monkeypatch):
+    def fail_if_called(self, p_value_less, p_value_more):
+        raise AssertionError("compose_wrapper_p_value should be called explicitly")
+
+    monkeypatch.setattr(MirroredWithAlpha, "compose_wrapper_p_value", fail_if_called)
+    m = MirroredWithAlpha(
+        Hypothesis.P0MoreThanP1, alpha=0.05, inference_mode="ranking"
+    )
+    with pytest.raises(AttributeError):
+        _ = m._p_value
+
+
 # --- inference_mode is not forwarded to child tests ---
 
 def test_inference_mode_is_not_forwarded_to_child_tests():
